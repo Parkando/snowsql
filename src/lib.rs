@@ -37,8 +37,6 @@ impl SnowflakeConnector {
             &user.to_ascii_uppercase(),
         )?;
 
-        println!("Token: {token}");
-
         let auth_header = HeaderValue::from_str(&format!("Bearer {}", token))?;
         let user_agent = concat!(env!("CARGO_PKG_NAME"), '/', env!("CARGO_PKG_VERSION"));
 
