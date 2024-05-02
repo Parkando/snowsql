@@ -8,9 +8,6 @@ pub mod bindings;
 #[cfg(feature = "time")]
 mod datetime;
 
-#[cfg(feature = "time")]
-pub use datetime::*;
-
 pub use bindings::*;
 
 pub trait SnowflakeDeserialize {
@@ -24,8 +21,8 @@ pub trait SnowflakeDeserialize {
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct PartitionInfo {
-    row_count: usize,
-    uncompressed_size: usize,
+    pub row_count: usize,
+    pub uncompressed_size: usize,
 }
 
 #[derive(Deserialize, Debug)]

@@ -13,7 +13,7 @@ categories = ["database"]
 proc-macro = true
 
 [dependencies]
-syn = "1.0"
+syn = "2"
 quote = "1.0"
 snowflake-deserialize = { path = "../snowflake-deserialize" }
 

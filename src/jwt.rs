@@ -1,6 +1,12 @@
 use anyhow::Context;
 use base64::Engine;
-use jwt_simple::prelude::*;
+use rsa::{
+    pkcs1v15::SigningKey,
+    pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePublicKey},
+    sha2::{Digest, Sha256},
+    signature::{Signer, SignatureEncoding},
+    RsaPrivateKey, RsaPublicKey,
+};
 
 use crate::{PrivateKey, PublicKey, Result};
 
@@ -10,25 +16,53 @@ pub fn create_token(
     account_identifier: &str,
     user: &str,
 ) -> Result<String> {
-    let fp = RS256PublicKey::from_pem(&public_key.0)
-        .context("Creating PublicKey PEM")?
-        .sha256_thumbprint();
+    let pub_key = RsaPublicKey::from_public_key_pem(public_key.0.as_str()).context("public key")?;
+    let priv_key = RsaPrivateKey::from_pkcs8_pem(private_key.0.as_str()).context("private key")?;
 
-    let new_bs = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(fp)
-        .context("Decoding non padded url safe thumbprint")?;
+    let mut hasher = Sha256::new();
+    hasher.update(pub_key.to_public_key_der().context("public key hash")?);
+    let hash_bs = hasher.finalize();
 
-    let correct_fp = base64::engine::general_purpose::STANDARD.encode(new_bs);
+    let thumbprint = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&hash_bs[..]);
 
-    let qualified_username = format!("{account_identifier}.{user}");
-    let issuer = format!("{qualified_username}.SHA256:{correct_fp}");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .context("getting system time")?;
 
-    let claims = Claims::create(Duration::from_hours(24 * 365 * 10))
-        .with_issuer(issuer)
-        .with_subject(qualified_username);
+    let payload = Payload {
+        iss: format!("{account_identifier}.{user}.SHA256:{thumbprint}"),
+        sub: format!("{account_identifier}.{user}"),
+        iat: now.as_millis(),
+        // 10 years expiry.
+        exp: (now + std::time::Duration::from_secs(10 * 365 * 24 * 60)).as_millis(),
+    };
 
-    let key_pair =
-        RS256KeyPair::from_pem(&private_key.0).context("Creating key par from private key pem")?;
+    // serialize payload to json
+    let payload_string = serde_json::to_string(&payload).context("serializing payload")?;
 
-    key_pair.sign(claims).context("Signing Claims")
+    // Hash the header and payload
+    let mut hasher = Sha256::new();
+    hasher.reset();
+    hasher.update(HEADER.as_bytes());
+    hasher.update(b".");
+    hasher.update(&payload_string);
+    let digest = hasher.finalize();
+    let signing_key = SigningKey::<Sha256>::new(priv_key);
+    // Sign the hash with private key
+
+    let hash = signing_key.sign(&digest);
+
+    let b64_hash = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hash.to_bytes().as_ref());
+
+    Ok(format!("{}.{}.{}", HEADER, payload_string, b64_hash))
+}
+
+static HEADER: &str = r#"{"alg":"RS256","typ":"JWT"}"#;
+
+#[derive(serde::Serialize)]
+struct Payload {
+    iss: String,
+    sub: String,
+    iat: u128,
+    exp: u128,
 }
