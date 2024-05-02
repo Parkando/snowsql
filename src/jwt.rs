@@ -23,13 +23,11 @@ pub fn create_token(
     hasher.update(pub_key.to_public_key_der().context("public key hash")?);
     let hash_bs = hasher.finalize();
 
-    let thumbprint = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&hash_bs[..]);
+    let thumbprint = base64::engine::general_purpose::STANDARD.encode(&hash_bs[..]);
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::SystemTime::UNIX_EPOCH)
         .context("getting system time")?;
-
-    println!("thumbprint: {thumbprint}");
 
     let payload = Payload {
         iss: format!("{account_identifier}.{user}.SHA256:{thumbprint}"),
@@ -41,21 +39,19 @@ pub fn create_token(
 
     // serialize payload to json
     let payload_string = serde_json::to_string(&payload).context("serializing payload")?;
+
     let payload_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload_string);
     let header_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(HEADER);
 
-    let mut hasher = Sha256::new();
-    hasher.update(&header_b64);
-    hasher.update(b".");
-    hasher.update(&payload_b64);
-    let digest = hasher.finalize();
+    let authentication = format!("{}.{}", header_b64, payload_b64);
+
     let signing_key = SigningKey::<Sha256>::new(priv_key);
     // Sign the hash with private key
 
-    let hash = signing_key.sign(&digest);
+    let signature = signing_key.sign(authentication.as_bytes());
 
     let b64_hash =
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hash.to_bytes().as_ref());
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature.to_bytes().as_ref());
 
     Ok(format!("{}.{}.{}", header_b64, payload_b64, b64_hash))
 }
