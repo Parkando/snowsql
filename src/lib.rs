@@ -1,11 +1,13 @@
 use data_manipulation::DataManipulationResult;
 use reqwest::header::{HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use serde::{Deserialize, Serialize};
-use snowflake_deserialize::{BindingKind, BindingValue, SnowflakeSqlResponse, SnowflakeSqlResult};
 use std::collections::HashMap;
 
 pub use snowflake_derive::SnowflakeDeserialize;
-pub use snowflake_deserialize::SnowflakeDeserialize;
+pub use snowflake_deserialize::{
+    BindingKind, BindingValue, DeserializeFromStr, Error as DeserializeError,
+    Result as DeserializeResult, SnowflakeDeserialize, SnowflakeSqlResponse, SnowflakeSqlResult,
+};
 
 pub mod data_manipulation;
 mod error;
@@ -13,7 +15,7 @@ mod jwt;
 
 pub use error::{CredentialsError, Error};
 
-type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug)]
 pub struct SnowflakeConnector {

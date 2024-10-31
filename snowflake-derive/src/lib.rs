@@ -38,25 +38,25 @@ fn impl_snowflake_deserialize(ast: &DeriveInput) -> TokenStream {
     #[rustfmt::skip]
     let gen = quote! {
 
-        impl #impl_generics snowflake_deserialize::SnowflakeDeserialize for #name #ty_generics #where_clause {
+        impl #impl_generics snowflake_connector::SnowflakeDeserialize for #name #ty_generics #where_clause {
             fn snowflake_deserialize(
-                response: snowflake_deserialize::SnowflakeSqlResponse,
-            ) -> snowflake_deserialize::Result<snowflake_connector::SnowflakeSqlResult<Self>> {
+                response: snowflake_connector::SnowflakeSqlResponse,
+            ) -> snowflake_connector::DeserializeResult<snowflake_connector::SnowflakeSqlResult<Self>> {
 
-		use snowflake_deserialize::DeserializeFromStr;
+		use snowflake_connector::DeserializeFromStr;
 
                 let count = response.result_set_meta_data.num_rows;
                 let mut results = Vec::with_capacity(count);
                 for data in response.data {
                     results.push(#name #ty_generics {
                         #(#t_name: <#t_ty>::deserialize_from_str(data[#t_index].as_deref())
-			  .map_err(|err| snowflake_deserialize::Error::Field {
+			  .map_err(|err| snowflake_connector::DeserializeError::Field {
 			      field: stringify!(#t_name),
 			      err: Box::new(err)
 			  })?),*
                     });
                 }
-                Ok(snowflake_deserialize::SnowflakeSqlResult {
+                Ok(snowflake_connector::SnowflakeSqlResult {
                     data: results,
                 })
             }
