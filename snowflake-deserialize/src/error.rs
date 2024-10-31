@@ -3,7 +3,7 @@ pub enum Error {
     #[error("unexpected null")]
     UnexpectedNull,
 
-    #[error("invalid date `{given}`: {err}")]
+    #[error("invalid value `{given}`: {err}")]
     Format { given: String, err: String },
 
     #[error("deserializing field `{field}`: {err}")]

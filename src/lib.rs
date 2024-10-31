@@ -12,8 +12,12 @@ pub use snowflake_deserialize::{
 pub mod data_manipulation;
 mod error;
 mod jwt;
+mod selectable;
 
-pub use error::{CredentialsError, Error};
+pub use {
+    error::{CredentialsError, Error},
+    selectable::*,
+};
 
 pub type Result<T> = std::result::Result<T, Error>;
 

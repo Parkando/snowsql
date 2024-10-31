@@ -38,6 +38,12 @@ fn impl_snowflake_deserialize(ast: &DeriveInput) -> TokenStream {
     #[rustfmt::skip]
     let gen = quote! {
 
+
+        impl #impl_generics snowflake_connector::Selectable for #name #ty_generics #where_clause {
+	    const SELECT: &'static str = stringify!(#(#t_name),*);
+	}
+
+
         impl #impl_generics snowflake_connector::SnowflakeDeserialize for #name #ty_generics #where_clause {
             fn snowflake_deserialize(
                 response: snowflake_connector::SnowflakeSqlResponse,
