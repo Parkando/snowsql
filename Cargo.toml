@@ -20,14 +20,13 @@ time = [ "snowflake-deserialize/time" ]
 snowflake-deserialize = { path = "snowflake-deserialize" }
 snowflake-derive = { path = "snowflake-derive" }
 
-anyhow = "1"
-
 rsa = { version = "0.9", default-features = false, features = [ "pem", "std", "sha2" ] }
 serde = { version = "1", features = ["derive"] }
 reqwest = { version = "0.12", default-features = false, features = [ "json", "rustls-tls", "gzip" ] }
 uuid = { version = "1", features = ["v4", "fast-rng" ] }
 serde_json = "1"
 base64 = "0.22"
+thiserror = "1.0.65"
 
 
 [workspace]

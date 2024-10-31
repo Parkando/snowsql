@@ -1,3 +1,5 @@
+use std::fmt;
+
 #[derive(Clone, Debug)]
 pub enum BindingValue {
     Bool(bool),
@@ -61,35 +63,24 @@ pub enum BindingKind {
     Time,
 }
 
-impl ToString for BindingValue {
-    fn to_string(&self) -> String {
+impl std::fmt::Display for BindingValue {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            BindingValue::Bool(value) => value.to_string(),
-            BindingValue::Byte(value) => value.to_string(),
-            BindingValue::SmallInt(value) => value.to_string(),
-            BindingValue::Int(value) => value.to_string(),
-            BindingValue::BigInt(value) => value.to_string(),
-            BindingValue::ISize(value) => value.to_string(),
-            BindingValue::UByte(value) => value.to_string(),
-            BindingValue::SmallUInt(value) => value.to_string(),
-            BindingValue::UInt(value) => value.to_string(),
-            BindingValue::BigUInt(value) => value.to_string(),
-            BindingValue::USize(value) => value.to_string(),
-            BindingValue::Float(value) => value.to_string(),
-            BindingValue::Double(value) => value.to_string(),
-            BindingValue::Char(value) => value.to_string(),
-            BindingValue::String(value) => value.to_string(),
-            //BindingValue::Decimal(value) => value.to_string(),
-            //BindingValue::DateTime(value) => value.timestamp_nanos().to_string(),
-            //BindingValue::Date(value) => value
-            //    .and_time(NaiveTime::default())
-            //    .timestamp_millis()
-            //    .to_string(),
-            //BindingValue::Time(value) => {
-            //    (Decimal::new(NaiveDate::default().and_time(*value).timestamp_nanos(), 0)
-            //        / rust_decimal_macros::dec!(60))
-            //    .to_string()
-            //}
+            BindingValue::Bool(v) => <bool as fmt::Display>::fmt(v, f),
+            BindingValue::Byte(v) => <i8 as fmt::Display>::fmt(v, f),
+            BindingValue::SmallInt(v) => <i16 as fmt::Display>::fmt(v, f),
+            BindingValue::Int(v) => <i32 as fmt::Display>::fmt(v, f),
+            BindingValue::BigInt(v) => <i64 as fmt::Display>::fmt(v, f),
+            BindingValue::ISize(v) => <isize as fmt::Display>::fmt(v, f),
+            BindingValue::UByte(v) => <u8 as fmt::Display>::fmt(v, f),
+            BindingValue::SmallUInt(v) => <u16 as fmt::Display>::fmt(v, f),
+            BindingValue::UInt(v) => <u32 as fmt::Display>::fmt(v, f),
+            BindingValue::BigUInt(v) => <u64 as fmt::Display>::fmt(v, f),
+            BindingValue::USize(v) => <usize as fmt::Display>::fmt(v, f),
+            BindingValue::Float(v) => <f32 as fmt::Display>::fmt(v, f),
+            BindingValue::Double(v) => <f64 as fmt::Display>::fmt(v, f),
+            BindingValue::Char(v) => <char as fmt::Display>::fmt(v, f),
+            BindingValue::String(v) => <String as fmt::Display>::fmt(v, f),
         }
     }
 }

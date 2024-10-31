@@ -1,16 +1,19 @@
-use anyhow::{bail, Context as _};
 use data_manipulation::DataManipulationResult;
 use reqwest::header::{HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use serde::{Deserialize, Serialize};
+use snowflake_deserialize::{BindingKind, BindingValue, SnowflakeSqlResponse, SnowflakeSqlResult};
 use std::collections::HashMap;
 
-pub use snowflake_derive::*;
-pub use snowflake_deserialize::*;
+pub use snowflake_derive::SnowflakeDeserialize;
+pub use snowflake_deserialize::SnowflakeDeserialize;
 
 pub mod data_manipulation;
+mod error;
 mod jwt;
 
-type Result<T> = anyhow::Result<T>;
+pub use error::{CredentialsError, Error};
+
+type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug)]
 pub struct SnowflakeConnector {
@@ -37,7 +40,9 @@ impl SnowflakeConnector {
             &user.to_ascii_uppercase(),
         )?;
 
-        let auth_header = HeaderValue::from_str(&format!("Bearer {}", token))?;
+        let auth_header = HeaderValue::from_str(&format!("Bearer {token}"))
+            .expect("could not serialize token into header");
+
         let user_agent = concat!(env!("CARGO_PKG_NAME"), '/', env!("CARGO_PKG_VERSION"));
 
         let headers = [
@@ -111,22 +116,23 @@ impl<'c> PendingQuery<'c> {
             .post(self.get_url())
             .json(&self.query)
             .send()
-            .await
-            .context("sending query")?;
+            .await?;
 
         let status = res.status();
         let bs = res.bytes().await?;
 
         if !status.is_success() {
-            let body_as_text = String::from_utf8_lossy(&bs);
-            bail!("got non 2xx response: {status}. Body:\n{body_as_text}");
+            let body = String::from_utf8_lossy(&bs).into();
+            return Err(Error::NokResponse { status, body });
         }
 
         let mut result = match serde_json::from_slice::<SnowflakeSqlResponse>(&bs) {
             Ok(deserialized) => deserialized,
             Err(err) => {
-                let body_as_text = String::from_utf8_lossy(&bs);
-                bail!("Error parsing result as SnowflakeSqlResponse: {err}. Body:\n{body_as_text}")
+                return Err(Error::DeserializeSnowflakeResult {
+                    err,
+                    body: String::from_utf8_lossy(&bs).into(),
+                })
             }
         };
 
@@ -134,36 +140,33 @@ impl<'c> PendingQuery<'c> {
             self.fetch_and_merge_partitions(&mut result).await?;
         }
 
-        result.deserialize()
+        Ok(result.deserialize()?)
     }
 
     async fn fetch_and_merge_partitions(&self, result: &mut SnowflakeSqlResponse) -> Result<()> {
         for index in 1..result.result_set_meta_data.partition_info.len() {
-
             println!("Getting partition {index}");
             let url = self.get_partition_url(&result.statement_handle, index);
 
-            let res = self
-                .client
-                .get(url)
-                .json(&self.query)
-                .send()
-                .await
-                .context("sending query")?;
+            let res = self.client.get(url).json(&self.query).send().await?;
 
             let status = res.status();
             let bs = res.bytes().await?;
 
             if !status.is_success() {
-                let body_as_text = String::from_utf8_lossy(&bs);
-                bail!("got non 2xx response: {status}. Body:\n{body_as_text}");
+                return Err(Error::NokResponse {
+                    status,
+                    body: String::from_utf8_lossy(&bs).into(),
+                });
             }
 
             let partition = match serde_json::from_slice::<Partition>(&bs) {
                 Ok(deserialized) => deserialized,
                 Err(err) => {
-                    let body_as_text = String::from_utf8_lossy(&bs);
-                    bail!("Error parsing result as SnowflakeSqlResponse: {err}. Body:\n{body_as_text}")
+                    return Err(Error::DeserializeSnowflakeResult {
+                        err,
+                        body: String::from_utf8_lossy(&bs).into(),
+                    })
                 }
             };
 
@@ -213,7 +216,10 @@ impl<'c> PendingQuery<'c> {
     }
 
     fn get_partition_url(&self, request_handle: &str, index: usize) -> String {
-        format!("{}statements/{request_handle}?partition={}", self.host, index)
+        format!(
+            "{}statements/{request_handle}?partition={}",
+            self.host, index
+        )
     }
 }
 
@@ -241,6 +247,7 @@ mod tests {
         use super::*;
         use crate as snowflake_connector;
 
+        #[allow(dead_code)]
         #[derive(Debug, SnowflakeDeserialize)]
         struct SnowyRow {
             client_id: String,
@@ -255,7 +262,7 @@ mod tests {
             let response = serde_json::from_str::<SnowflakeSqlResponse>(EXAMPLE)
                 .expect("deserializing response");
 
-            let sql_res = response
+            response
                 .deserialize::<SnowyRow>()
                 .expect("deserializing snowy rows");
         }

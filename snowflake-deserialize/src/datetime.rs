@@ -1,26 +1,62 @@
-use anyhow::anyhow;
+use time::format_description::FormatItem;
+
+use crate::Error;
 
 use crate::DeserializeFromStr;
 
+static DATE_FORMAT: &[FormatItem<'_>] =
+    time::macros::format_description!("[unix_timestamp].[subsecond]");
+
 /// Impl for Date.
 ///
-/// We need to fail if the Float contains decimals, this is a DateTime, not a Date.
+/// We need to fail if the Float contains decimals, this is a Date, not a DateTime.
 ///
 impl DeserializeFromStr for time::Date {
-    fn deserialize_from_str(s: Option<&str>) -> Result<Self, anyhow::Error>
+    fn deserialize_from_str(s: Option<&str>) -> Result<Self, Error>
     where
         Self: Sized,
     {
-        let s = s.ok_or_else(|| anyhow!("Unexpected null when parsing DateTime"))?;
-        let f = s
-            .parse::<f32>()
-            .map_err(|err| anyhow!("expected DateTime as float. But got `{s}`: {err}"))?;
+        time::OffsetDateTime::deserialize_from_str(s).map(|dt| dt.date())
+    }
+}
 
-        let unix_ts = f as i64;
+/// Impl for Date.
+///
+/// We need to fail if the Float contains decimals, this is a Date, not a DateTime.
+///
+impl DeserializeFromStr for time::OffsetDateTime {
+    fn deserialize_from_str(s: Option<&str>) -> Result<Self, Error>
+    where
+        Self: Sized,
+    {
+        let s = s.ok_or(Error::UnexpectedNull)?;
 
-        time::OffsetDateTime::from_unix_timestamp(f as i64)
-            .map_err(|err| anyhow!("Invalid Unix TS `{unix_ts}` (as float: `{f}`): {err}"))
-            .map(|dt| dt.date())
+        time::OffsetDateTime::parse(s, DATE_FORMAT).map_err(|err| Error::Format {
+            given: s.into(),
+            err: err.to_string(),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+    use time::macros::datetime;
+
+    #[test]
+    fn deserialize_date_time() {
+        assert_eq!(
+            datetime!(2024-10-17 12:03:22.422528 UTC),
+            time::OffsetDateTime::deserialize_from_str(Some("1729166602.422528000"))
+                .expect("deserializing")
+        );
+
+        assert_eq!(
+            datetime!(2024-10-18 10:54:22.912451 UTC),
+            time::OffsetDateTime::deserialize_from_str(Some("1729248862.912451000"))
+                .expect("deserializing")
+        );
     }
 }
 

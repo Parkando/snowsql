@@ -1,19 +1,21 @@
 use serde::Deserialize;
 use std::str::FromStr;
 
-use anyhow::Context as _;
-
 pub mod bindings;
+
+mod error;
+
+pub use error::Error;
 
 #[cfg(feature = "time")]
 mod datetime;
 
 pub use bindings::*;
 
+pub type Result<T> = std::result::Result<T, Error>;
+
 pub trait SnowflakeDeserialize {
-    fn snowflake_deserialize(
-        response: SnowflakeSqlResponse,
-    ) -> Result<SnowflakeSqlResult<Self>, anyhow::Error>
+    fn snowflake_deserialize(response: SnowflakeSqlResponse) -> Result<SnowflakeSqlResult<Self>>
     where
         Self: Sized;
 }
@@ -44,9 +46,7 @@ impl SnowflakeSqlResponse {
         self.result_set_meta_data.partition_info.len() > 1
     }
 
-    pub fn deserialize<T: SnowflakeDeserialize>(
-        self,
-    ) -> Result<SnowflakeSqlResult<T>, anyhow::Error> {
+    pub fn deserialize<T: SnowflakeDeserialize>(self) -> Result<SnowflakeSqlResult<T>> {
         T::snowflake_deserialize(self)
     }
 }
@@ -87,7 +87,7 @@ pub struct SnowflakeSqlResult<T> {
 ///
 /// Data in cells are not their type, they are simply strings that need to be converted.
 pub trait DeserializeFromStr {
-    fn deserialize_from_str(s: Option<&str>) -> Result<Self, anyhow::Error>
+    fn deserialize_from_str(s: Option<&str>) -> Result<Self>
     where
         Self: Sized;
 }
@@ -96,7 +96,7 @@ impl<T> DeserializeFromStr for Option<T>
 where
     T: DeserializeFromStr,
 {
-    fn deserialize_from_str(s: Option<&str>) -> Result<Self, anyhow::Error> {
+    fn deserialize_from_str(s: Option<&str>) -> Result<Self> {
         if s.is_none() {
             Ok(None)
         } else {
@@ -107,9 +107,13 @@ where
 macro_rules! impl_deserialize_from_str {
     ($ty: ty) => {
         impl DeserializeFromStr for $ty {
-            fn deserialize_from_str(s: Option<&str>) -> anyhow::Result<Self> {
-                let res = s.map(<$ty>::from_str).context("unexpected null")??;
-                Ok(res)
+            fn deserialize_from_str(s: Option<&str>) -> Result<Self> {
+                s.ok_or(Error::UnexpectedNull).and_then(|s| {
+                    <$ty>::from_str(s).map_err(|err| Error::Format {
+                        given: s.into(),
+                        err: err.to_string(),
+                    })
+                })
             }
         }
     };

@@ -1,4 +1,3 @@
-use anyhow::Context;
 use base64::Engine;
 use rsa::{
     pkcs1v15::SigningKey,
@@ -8,7 +7,7 @@ use rsa::{
     RsaPrivateKey, RsaPublicKey,
 };
 
-use crate::{PrivateKey, PublicKey, Result};
+use crate::{CredentialsError, PrivateKey, PublicKey, Result};
 
 pub fn create_token(
     public_key: PublicKey,
@@ -16,18 +15,24 @@ pub fn create_token(
     account_identifier: &str,
     user: &str,
 ) -> Result<String> {
-    let pub_key = RsaPublicKey::from_public_key_pem(public_key.0.as_str()).context("public key")?;
-    let priv_key = RsaPrivateKey::from_pkcs8_pem(private_key.0.as_str()).context("private key")?;
+    let pub_key = RsaPublicKey::from_public_key_pem(public_key.0.as_str())
+        .map_err(|_| CredentialsError::PublicKey)?;
+    let priv_key = RsaPrivateKey::from_pkcs8_pem(private_key.0.as_str())
+        .map_err(|_| CredentialsError::PrivateKey)?;
 
     let mut hasher = Sha256::new();
-    hasher.update(pub_key.to_public_key_der().context("public key hash")?);
+    hasher.update(
+        pub_key
+            .to_public_key_der()
+            .map_err(|_| CredentialsError::Token("converting public key to DER".into()))?,
+    );
     let hash_bs = hasher.finalize();
 
     let thumbprint = base64::engine::general_purpose::STANDARD.encode(&hash_bs[..]);
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::SystemTime::UNIX_EPOCH)
-        .context("getting system time")?;
+        .map_err(|_| CredentialsError::Token("getting system time".into()))?;
 
     let payload = Payload {
         iss: format!("{account_identifier}.{user}.SHA256:{thumbprint}"),
@@ -38,7 +43,8 @@ pub fn create_token(
     };
 
     // serialize payload to json
-    let payload_string = serde_json::to_string(&payload).context("serializing payload")?;
+    let payload_string = serde_json::to_string(&payload)
+        .map_err(|_| CredentialsError::Token("serializing token payload to json string".into()))?;
 
     let payload_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload_string);
     let header_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(HEADER);
@@ -73,25 +79,19 @@ mod tests {
 
     #[test]
     fn assert_token_is_correct() {
-        let private_key = std::env::var("PRIVATE_KEY_PEM")
-            .context("PRIVATE_KEY_PEM env var")
-            .expect("PRIVATE_KEY_PEM must be set");
-        let public_key = std::env::var("PUBLIC_KEY_PEM")
-            .context("PUBLIC_KEY_PEM env var")
-            .expect("PUBLIC_KEY_PEM must be set");
+        let private_key = std::env::var("PRIVATE_KEY_PEM").expect("PRIVATE_KEY_PEM must be set");
+        let public_key = std::env::var("PUBLIC_KEY_PEM").expect("PUBLIC_KEY_PEM must be set");
 
-        let host = "fx81169.eu-central-1";
+        let _host = "fx81169.eu-central-1";
         let account_identifier = "fx81169";
         let user = "ParkandoReader";
 
-        let token = create_token(
+        create_token(
             PublicKey(public_key),
             PrivateKey(private_key),
             account_identifier,
             user,
         )
         .expect("creating token");
-
-        assert_eq!("asdsad", token);
     }
 }
