@@ -5,7 +5,7 @@ use crate::Error;
 use crate::DeserializeFromStr;
 
 static DATE_FORMAT: &[FormatItem<'_>] =
-    time::macros::format_description!("[unix_timestamp].[subsecond]");
+    time::macros::format_description!("[unix_timestamp][ignore count:1][subsecond]");
 
 /// Impl for Date.
 ///
@@ -55,6 +55,12 @@ mod tests {
         assert_eq!(
             datetime!(2024-10-18 10:54:22.912451 UTC),
             time::OffsetDateTime::deserialize_from_str(Some("1729248862.912451000"))
+                .expect("deserializing")
+        );
+
+        assert_eq!(
+            datetime!(2024-02-06 14:05:30.144 UTC),
+            time::OffsetDateTime::deserialize_from_str(Some("1707228330 1440"))
                 .expect("deserializing")
         );
     }
