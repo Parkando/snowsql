@@ -14,13 +14,13 @@ pub enum Error {
     NokResponse { status: StatusCode, body: String },
 
     #[error("parsing snowflake response: {err} with body:\n{body}")]
-    DeserializeSnowflakeResult {
+    DeserializeSnowflakeResponse {
         err: serde_json::Error,
         body: String,
     },
 
     #[error("deserialize: {0}")]
-    Deserialize(#[from] snowflake_deserialize::Error),
+    Deserialize(#[from] snowsql_deserialize::Error),
 }
 
 #[derive(Debug, thiserror::Error)]

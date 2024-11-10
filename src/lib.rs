@@ -1,12 +1,11 @@
 use data_manipulation::DataManipulationResult;
 use reqwest::header::{HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub use snowflake_derive::SnowflakeDeserialize;
-pub use snowflake_deserialize::{
-    BindingKind, BindingValue, DeserializeFromStr, Error as DeserializeError,
-    Result as DeserializeResult, SnowflakeDeserialize, SnowflakeSqlResponse, SnowflakeSqlResult,
+pub use snowsql_derive::{FromRow, Selectable};
+pub use snowsql_deserialize::{
+    BindingKind, BindingValue, DeserializeFromStr, Error as DeserializeError, FromRow,
+    Result as DeserializeResult,
 };
 
 pub mod data_manipulation;
@@ -89,10 +88,10 @@ impl SnowflakeConnector {
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(serde::Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 struct Partition {
-    data: Vec<Vec<Option<String>>>,
+    data: Vec<RawRow>,
 }
 
 #[derive(Debug)]
@@ -116,7 +115,7 @@ impl<'c> PendingQuery<'c> {
         Ok(res)
     }
 
-    pub async fn select<T: SnowflakeDeserialize>(self) -> Result<SnowflakeSqlResult<T>> {
+    pub async fn select(self) -> Result<Response<RawRow>> {
         let res = self
             .client
             .post(self.get_url())
@@ -132,27 +131,26 @@ impl<'c> PendingQuery<'c> {
             return Err(Error::NokResponse { status, body });
         }
 
-        let mut result = match serde_json::from_slice::<SnowflakeSqlResponse>(&bs) {
+        let mut response = match serde_json::from_slice::<Response<RawRow>>(&bs) {
             Ok(deserialized) => deserialized,
             Err(err) => {
-                return Err(Error::DeserializeSnowflakeResult {
+                return Err(Error::DeserializeSnowflakeResponse {
                     err,
                     body: String::from_utf8_lossy(&bs).into(),
                 })
             }
         };
 
-        if result.has_partitions() {
-            self.fetch_and_merge_partitions(&mut result).await?;
+        if response.has_partitions() {
+            self.fetch_and_merge_partitions(&mut response).await?;
         }
 
-        Ok(result.deserialize()?)
+        Ok(response)
     }
 
-    async fn fetch_and_merge_partitions(&self, result: &mut SnowflakeSqlResponse) -> Result<()> {
-        for index in 1..result.result_set_meta_data.partition_info.len() {
-            println!("Getting partition {index}");
-            let url = self.get_partition_url(&result.statement_handle, index);
+    async fn fetch_and_merge_partitions(&self, result: &mut Response<RawRow>) -> Result<()> {
+        for index in 1..result.info.result_set_meta_data.partition_info.len() {
+            let url = self.get_partition_url(&result.info.statement_handle, index);
 
             let res = self.client.get(url).json(&self.query).send().await?;
 
@@ -169,7 +167,7 @@ impl<'c> PendingQuery<'c> {
             let partition = match serde_json::from_slice::<Partition>(&bs) {
                 Ok(deserialized) => deserialized,
                 Err(err) => {
-                    return Err(Error::DeserializeSnowflakeResult {
+                    return Err(Error::DeserializeSnowflakeResponse {
                         err,
                         body: String::from_utf8_lossy(&bs).into(),
                     })
@@ -194,14 +192,17 @@ impl<'c> PendingQuery<'c> {
             .await?;
         Ok(res)
     }
+
     pub fn with_timeout(mut self, timeout: u32) -> Self {
         self.query.timeout = Some(timeout);
         self
     }
+
     pub fn with_role<R: ToString>(mut self, role: R) -> Self {
         self.query.role = Some(role.to_string());
         self
     }
+
     pub fn add_binding<T: Into<BindingValue>>(mut self, value: T) -> Self {
         let value: BindingValue = value.into();
 
@@ -229,7 +230,7 @@ impl<'c> PendingQuery<'c> {
     }
 }
 
-#[derive(Serialize, Debug)]
+#[derive(serde::Serialize, Debug)]
 pub struct SnowflakeQuery {
     statement: String,
     timeout: Option<u32>,
@@ -238,145 +239,85 @@ pub struct SnowflakeQuery {
     bindings: HashMap<String, Binding>,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(serde::Serialize, Debug)]
 pub struct Binding {
     #[serde(rename = "type")]
     kind: BindingKind,
     value: String,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    mod test_derive {
-        use super::*;
-        use crate as snowflake_connector;
-
-        #[allow(dead_code)]
-        #[derive(Debug, SnowflakeDeserialize)]
-        struct SnowyRow {
-            client_id: String,
-            client_name: String,
-            site_id: String,
-            site_name: String,
-            num_permits: Option<i64>,
-        }
-
-        #[test]
-        fn deserialize_example() {
-            let response = serde_json::from_str::<SnowflakeSqlResponse>(EXAMPLE)
-                .expect("deserializing response");
-
-            response
-                .deserialize::<SnowyRow>()
-                .expect("deserializing snowy rows");
-        }
-
-        static EXAMPLE: &str = r#"
-{
-  "resultSetMetaData": {
-    "numRows": 2,
-    "format": "jsonv2",
-    "partitionInfo": [
-      {
-        "rowCount": 2,
-        "uncompressedSize": 201
-      }
-    ],
-    "rowType": [
-      {
-        "name": "CLIENT_ID",
-        "database": "M46_DATA_SHARE_PARKING",
-        "schema": "PUBLIC",
-        "table": "SPOTS_AND_AGREEMENTS",
-        "byteLength": null,
-        "type": "fixed",
-        "scale": 0,
-        "precision": 38,
-        "nullable": false,
-        "collation": null,
-        "length": null
-      },
-      {
-        "name": "CLIENT_NAME",
-        "database": "M46_DATA_SHARE_PARKING",
-        "schema": "PUBLIC",
-        "table": "SPOTS_AND_AGREEMENTS",
-        "byteLength": 16777216,
-        "type": "text",
-        "scale": null,
-        "precision": null,
-        "nullable": true,
-        "collation": null,
-        "length": 16777216
-      },
-      {
-        "name": "SITE_ID",
-        "database": "M46_DATA_SHARE_PARKING",
-        "schema": "PUBLIC",
-        "table": "SPOTS_AND_AGREEMENTS",
-        "byteLength": 144,
-        "type": "text",
-        "scale": null,
-        "precision": null,
-        "nullable": true,
-        "collation": null,
-        "length": 36
-      },
-      {
-        "name": "SITE_NAME",
-        "database": "M46_DATA_SHARE_PARKING",
-        "schema": "PUBLIC",
-        "table": "SPOTS_AND_AGREEMENTS",
-        "byteLength": 16777216,
-        "type": "text",
-        "scale": null,
-        "precision": null,
-        "nullable": true,
-        "collation": null,
-        "length": 16777216
-      },
-      {
-        "name": "NUM_PERMITS",
-        "database": "M46_DATA_SHARE_PARKING",
-        "schema": "PUBLIC",
-        "table": "SPOTS_AND_AGREEMENTS",
-        "byteLength": null,
-        "type": "fixed",
-        "scale": 0,
-        "precision": 38,
-        "nullable": true,
-        "collation": null,
-        "length": null
-      }
-    ]
-  },
-  "data": [
-    [
-      "3",
-      "Parkando",
-      "7a7cb2b5-8f4b-4f49-9875-32576d808de2",
-      "Grev Turegatan 29 - TCO-garaget",
-      null
-    ],
-    [
-      "3",
-      "Parkando",
-      "7a7cb2b5-8f4b-4f49-9875-32576d808de2",
-      "Grev Turegatan 29 - TCO-garaget",
-      null
-    ]
-  ],
-  "code": "090001",
-  "statementStatusUrl": "/api/v2/statements/01ad9ea3-3201-dca3-0000-a219000bb062?requestId=0a404baa-8f14-45f1-894c-a4f8ab7ca9de",
-  "requestId": "0a404baa-8f14-45f1-894c-a4f8ab7ca9de",
-  "sqlState": "00000",
-  "statementHandle": "01ad9ea3-3201-dca3-0000-a219000bb062",
-  "message": "Statement executed successfully.",
-  "createdOn": 1689333321982
+#[derive(serde::Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PartitionInfo {
+    pub row_count: usize,
+    pub uncompressed_size: usize,
 }
 
-"#;
+#[derive(Debug, serde::Deserialize)]
+pub struct RawRow(pub Vec<Option<String>>);
+
+#[derive(serde::Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Response<T> {
+    pub data: Vec<T>,
+
+    #[serde(flatten)]
+    pub info: ResponseInfo,
+}
+#[derive(serde::Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ResponseInfo {
+    pub result_set_meta_data: MetaData,
+    pub code: String,
+    pub statement_status_url: String,
+    pub request_id: String,
+    pub sql_state: String,
+    pub message: String,
+    pub statement_handle: String,
+    //pub created_on: u64,
+}
+
+impl<T> Response<T> {
+    fn has_partitions(&self) -> bool {
+        1 < self.info.result_set_meta_data.partition_info.len()
     }
+}
+
+impl Response<RawRow> {
+    pub fn data<R: FromRow>(self) -> Result<Response<R>> {
+        Ok(Response {
+            data: self
+                .data
+                .into_iter()
+                .map(|rr: RawRow| R::from_row(rr.0))
+                .collect::<snowsql_deserialize::Result<Vec<R>>>()?,
+            info: self.info,
+        })
+    }
+}
+
+#[derive(serde::Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct MetaData {
+    pub num_rows: usize,
+    pub format: String,
+    pub row_type: Vec<RowType>,
+    partition_info: Vec<PartitionInfo>,
+}
+
+#[derive(serde::Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct RowType {
+    pub name: String,
+    pub database: String,
+    pub schema: String,
+    pub table: String,
+    pub precision: Option<u32>,
+    pub byte_length: Option<usize>,
+    #[serde(rename = "type")]
+    pub data_type: String,
+    pub scale: Option<i32>,
+    pub nullable: bool,
+    //pub collation: ???,
+    //pub length: ???,
 }

@@ -1,4 +1,3 @@
-use serde::Deserialize;
 use std::str::FromStr;
 
 pub mod bindings;
@@ -14,72 +13,10 @@ pub use bindings::*;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-pub trait SnowflakeDeserialize {
-    fn snowflake_deserialize(response: SnowflakeSqlResponse) -> Result<SnowflakeSqlResult<Self>>
+pub trait FromRow {
+    fn from_row(row: Vec<Option<String>>) -> Result<Self>
     where
         Self: Sized;
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct PartitionInfo {
-    pub row_count: usize,
-    pub uncompressed_size: usize,
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct SnowflakeSqlResponse {
-    pub result_set_meta_data: MetaData,
-    pub data: Vec<Vec<Option<String>>>,
-    pub code: String,
-    pub statement_status_url: String,
-    pub request_id: String,
-    pub sql_state: String,
-    pub message: String,
-    pub statement_handle: String,
-    //pub created_on: u64,
-}
-
-impl SnowflakeSqlResponse {
-    pub fn has_partitions(&self) -> bool {
-        self.result_set_meta_data.partition_info.len() > 1
-    }
-
-    pub fn deserialize<T: SnowflakeDeserialize>(self) -> Result<SnowflakeSqlResult<T>> {
-        T::snowflake_deserialize(self)
-    }
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct MetaData {
-    pub num_rows: usize,
-    pub format: String,
-    pub row_type: Vec<RowType>,
-    pub partition_info: Vec<PartitionInfo>,
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct RowType {
-    pub name: String,
-    pub database: String,
-    pub schema: String,
-    pub table: String,
-    pub precision: Option<u32>,
-    pub byte_length: Option<usize>,
-    #[serde(rename = "type")]
-    pub data_type: String,
-    pub scale: Option<i32>,
-    pub nullable: bool,
-    //pub collation: ???,
-    //pub length: ???,
-}
-
-#[derive(Debug)]
-pub struct SnowflakeSqlResult<T> {
-    pub data: Vec<T>,
 }
 
 /// For custom data parsing,

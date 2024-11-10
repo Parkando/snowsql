@@ -1,5 +1,5 @@
 [package]
-name = "snowflake-derive"
+name = "snowsql-derive"
 version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
@@ -15,5 +15,5 @@ proc-macro = true
 [dependencies]
 syn = "2"
 quote = "1.0"
-snowflake-deserialize = { path = "../snowflake-deserialize" }
+snowsql-deserialize = { path = "../snowsql-deserialize" }
 

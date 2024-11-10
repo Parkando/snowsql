@@ -1,6 +1,6 @@
 [package]
-name = "snowflake-connector"
-version = "6.0.0"
+name = "snowsql"
+version = "7.0.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Connect to Snowflake. Forked from https://github.com/Ripper53/snowflake-connector"
@@ -14,11 +14,11 @@ exclude = ["/environment_variables"]
 
 [features]
 default = [ "time" ]
-time = [ "snowflake-deserialize/time" ]
+time = [ "snowsql-deserialize/time" ]
 
 [dependencies]
-snowflake-deserialize = { path = "snowflake-deserialize" }
-snowflake-derive = { path = "snowflake-derive" }
+snowsql-deserialize = { path = "snowsql-deserialize" }
+snowsql-derive = { path = "snowsql-derive" }
 
 rsa = { version = "0.9", default-features = false, features = [ "pem", "std", "sha2" ] }
 serde = { version = "1", features = ["derive"] }
@@ -31,6 +31,6 @@ thiserror = "1.0.65"
 
 [workspace]
 members = [
-    "snowflake-deserialize",
-    "snowflake-derive",
+    "snowsql-deserialize",
+    "snowsql-derive",
 ]
