@@ -16,7 +16,7 @@ fn deserialize_example() {
         .expect("deserializing response");
 
     response
-        .data::<SnowyRow>()
+        .rows::<SnowyRow>()
         .expect("deserializing snowy rows");
 }
 

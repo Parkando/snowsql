@@ -1,5 +1,4 @@
 use data_manipulation::DataManipulationResult;
-use reqwest::header::{HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use std::collections::HashMap;
 
 pub use snowsql_derive::{FromRow, Selectable};
@@ -8,82 +7,49 @@ pub use snowsql_deserialize::{
     Result as DeserializeResult,
 };
 
+mod client;
 pub mod data_manipulation;
 mod error;
 mod jwt;
+mod pagination;
 mod selectable;
 
 pub use {
+    client::Client,
     error::{CredentialsError, Error},
+    pagination::*,
     selectable::*,
 };
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-#[derive(Debug)]
-pub struct SnowflakeConnector {
-    host: String,
-    pub token: String,
-    client: reqwest::Client,
-}
-
 pub struct PrivateKey(pub String);
 pub struct PublicKey(pub String);
 
-impl SnowflakeConnector {
-    pub fn try_new(
-        private_key: PrivateKey,
-        public_key: PublicKey,
-        host: &str,
-        account_identifier: &str,
-        user: &str,
-    ) -> Result<Self> {
-        let token = jwt::create_token(
-            public_key,
-            private_key,
-            &account_identifier.to_ascii_uppercase(),
-            &user.to_ascii_uppercase(),
-        )?;
+pub fn sql(statement: impl Into<String>) -> QueryBuilder {
+    QueryBuilder::new(statement)
+}
 
-        let auth_header = HeaderValue::from_str(&format!("Bearer {token}"))
-            .expect("could not serialize token into header");
+trait ResponseOk {
+    async fn ok<T: serde::de::DeserializeOwned>(self) -> Result<T>;
+}
 
-        let user_agent = concat!(env!("CARGO_PKG_NAME"), '/', env!("CARGO_PKG_VERSION"));
+impl ResponseOk for reqwest::Response {
+    async fn ok<T: serde::de::DeserializeOwned>(self) -> Result<T> {
+        let status = self.status();
+        let bs = self.bytes().await?;
 
-        let headers = [
-            (CONTENT_TYPE, HeaderValue::from_static("application/json")),
-            (AUTHORIZATION, auth_header),
-            (ACCEPT, HeaderValue::from_static("application/json")),
-            (USER_AGENT, HeaderValue::from_static(user_agent)),
-            (
-                HeaderName::from_static("x-snowflake-authorization-token-type"),
-                HeaderValue::from_static("KEYPAIR_JWT"),
-            ),
-        ];
+        if !status.is_success() {
+            let body = String::from_utf8_lossy(&bs).into();
+            return Err(Error::NokResponse { status, body });
+        }
 
-        let client = reqwest::Client::builder()
-            .default_headers(headers.into_iter().collect())
-            .gzip(true)
-            .build()?;
-
-        Ok(SnowflakeConnector {
-            host: format!("https://{host}.snowflakecomputing.com/api/v2/"),
-            token,
-            client,
-        })
-    }
-
-    pub fn sql(&self, statement: impl Into<String>) -> PendingQuery<'_> {
-        PendingQuery {
-            client: &self.client,
-            host: &self.host,
-            query: SnowflakeQuery {
-                statement: statement.into(),
-                timeout: None,
-                role: None,
-                bindings: Default::default(),
-            },
-            uuid: uuid::Uuid::new_v4(),
+        match serde_json::from_slice::<T>(&bs) {
+            Ok(deserialized) => Ok(deserialized),
+            Err(err) => Err(Error::DeserializeSnowflakeResponse {
+                err,
+                body: String::from_utf8_lossy(&bs).into(),
+            }),
         }
     }
 }
@@ -94,112 +60,137 @@ struct Partition {
     data: Vec<RawRow>,
 }
 
-#[derive(Debug)]
-pub struct PendingQuery<'c> {
-    client: &'c reqwest::Client,
-    host: &'c str,
-    query: SnowflakeQuery,
-    uuid: uuid::Uuid,
+#[derive(Clone, Debug)]
+pub struct QueryBuilder {
+    statement: String,
+    timeout: Option<u32>,
+    role: Option<String>,
+    bindings: HashMap<String, Binding>,
+    order_by: Option<String>,
+    offset: Option<usize>,
+    limit: Option<usize>,
 }
 
-impl<'c> PendingQuery<'c> {
-    pub async fn text(self) -> Result<String> {
-        let res = self
-            .client
-            .post(self.get_url())
-            .json(&self.query)
+impl QueryBuilder {
+    pub fn new(query: impl Into<String>) -> Self {
+        Self {
+            statement: query.into(),
+            timeout: None,
+            role: None,
+            bindings: HashMap::default(),
+            order_by: None,
+            offset: None,
+            limit: None,
+        }
+    }
+
+    fn build_query(self) -> SnowflakeQuery {
+        let mut statement = self.statement.clone();
+
+        if let Some(order_by) = self.order_by.as_deref() {
+            statement.push_str(" ORDER BY '");
+            statement.push_str(order_by);
+            statement.push('\'');
+        }
+
+        if let Some(limit) = self.limit {
+            statement.push_str(&format!(" LIMIT {limit}"));
+        }
+
+        if let Some(offset) = self.offset {
+            statement.push_str(&format!(" OFFSET {offset}"));
+        }
+
+        SnowflakeQuery {
+            statement,
+            timeout: self.timeout,
+            role: self.role,
+            bindings: self.bindings,
+        }
+    }
+
+    pub async fn text(self, c: &Client) -> Result<String> {
+        Ok(c.post()
+            .json(&self.build_query())
             .send()
             .await?
             .text()
-            .await?;
-        Ok(res)
+            .await?)
     }
 
-    pub async fn select(self) -> Result<Response<RawRow>> {
-        let res = self
-            .client
-            .post(self.get_url())
-            .json(&self.query)
+    pub async fn query(self, c: &Client) -> Result<Response<RawRow>> {
+        let qry = self.build_query();
+        println!(
+            "sending query `{}`",
+            serde_json::to_string_pretty(&qry).unwrap()
+        );
+
+        let mut response = c
+            .post()
+            .json(&qry)
             .send()
+            .await?
+            .ok::<Response<RawRow>>()
             .await?;
 
-        let status = res.status();
-        let bs = res.bytes().await?;
+        for index in 1..response.info.result_set_meta_data.partition_info.len() {
+            let partition = c
+                .get_partition(&response.info.statement_handle, index)
+                .send()
+                .await?
+                .ok::<Partition>()
+                .await?;
 
-        if !status.is_success() {
-            let body = String::from_utf8_lossy(&bs).into();
-            return Err(Error::NokResponse { status, body });
-        }
-
-        let mut response = match serde_json::from_slice::<Response<RawRow>>(&bs) {
-            Ok(deserialized) => deserialized,
-            Err(err) => {
-                return Err(Error::DeserializeSnowflakeResponse {
-                    err,
-                    body: String::from_utf8_lossy(&bs).into(),
-                })
-            }
-        };
-
-        if response.has_partitions() {
-            self.fetch_and_merge_partitions(&mut response).await?;
+            response.data.extend(partition.data);
         }
 
         Ok(response)
     }
 
-    async fn fetch_and_merge_partitions(&self, result: &mut Response<RawRow>) -> Result<()> {
-        for index in 1..result.info.result_set_meta_data.partition_info.len() {
-            let url = self.get_partition_url(&result.info.statement_handle, index);
-
-            let res = self.client.get(url).json(&self.query).send().await?;
-
-            let status = res.status();
-            let bs = res.bytes().await?;
-
-            if !status.is_success() {
-                return Err(Error::NokResponse {
-                    status,
-                    body: String::from_utf8_lossy(&bs).into(),
-                });
-            }
-
-            let partition = match serde_json::from_slice::<Partition>(&bs) {
-                Ok(deserialized) => deserialized,
-                Err(err) => {
-                    return Err(Error::DeserializeSnowflakeResponse {
-                        err,
-                        body: String::from_utf8_lossy(&bs).into(),
-                    })
-                }
-            };
-
-            result.data.extend(partition.data);
-        }
-
-        Ok(())
+    pub fn paginated<R: FromRow>(self, client: &Client, pagination: Pagination) -> Paginated<R> {
+        Paginated::new(client, self, pagination)
     }
 
     /// Use with `delete`, `insert`, `update` row(s).
-    pub async fn manipulate(self) -> Result<DataManipulationResult> {
-        let res = self
-            .client
-            .post(self.get_url())
-            .json(&self.query)
+    pub async fn manipulate(self, c: &Client) -> Result<DataManipulationResult> {
+        let res = c
+            .post()
+            .json(&self.build_query())
             .send()
             .await?
-            .json()
+            .ok()
             .await?;
         Ok(res)
     }
 
+    pub fn sql(mut self, s: impl AsRef<str>) -> Self {
+        self.statement.push(' ');
+        self.statement.push_str(s.as_ref());
+        self
+    }
+
+    pub fn order_by(mut self, field: impl Into<String>) -> Self {
+        self.order_by = Some(field.into());
+        self
+    }
+
+    pub fn offset(mut self, offset: usize) -> Self {
+        self.offset = Some(offset);
+        self
+    }
+
+    pub fn limit(mut self, limit: usize) -> Self {
+        self.limit = Some(limit);
+        self
+    }
+
     pub fn with_timeout(mut self, timeout: u32) -> Self {
-        self.query.timeout = Some(timeout);
+        self.timeout = Some(timeout);
         self
     }
 
     pub fn with_role<R: ToString>(mut self, role: R) -> Self {
-        self.query.role = Some(role.to_string());
+        self.role = Some(role.to_string());
         self
     }
 
@@ -211,35 +202,24 @@ impl<'c> PendingQuery<'c> {
             value: value.to_string(),
         };
 
-        self.query
-            .bindings
-            .insert((self.query.bindings.len() + 1).to_string(), binding);
+        self.bindings
+            .insert((self.bindings.len() + 1).to_string(), binding);
 
         self
     }
-    fn get_url(&self) -> String {
-        // TODO: make another return type that allows retrying by calling same statement again with retry flag!
-        format!("{}statements?requestId={}", self.host, self.uuid)
-    }
-
-    fn get_partition_url(&self, request_handle: &str, index: usize) -> String {
-        format!(
-            "{}statements/{request_handle}?partition={}",
-            self.host, index
-        )
-    }
 }
 
-#[derive(serde::Serialize, Debug)]
+#[derive(Clone, serde::Serialize, Debug)]
 pub struct SnowflakeQuery {
     statement: String,
     timeout: Option<u32>,
     role: Option<String>,
+
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     bindings: HashMap<String, Binding>,
 }
 
-#[derive(serde::Serialize, Debug)]
+#[derive(Clone, serde::Serialize, Debug)]
 pub struct Binding {
     #[serde(rename = "type")]
     kind: BindingKind,
@@ -255,6 +235,15 @@ pub struct PartitionInfo {
 
 #[derive(Debug, serde::Deserialize)]
 pub struct RawRow(pub Vec<Option<String>>);
+
+impl FromRow for RawRow {
+    fn from_row(row: Vec<Option<String>>) -> DeserializeResult<Self>
+    where
+        Self: Sized,
+    {
+        Ok(Self(row))
+    }
+}
 
 #[derive(serde::Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -277,22 +266,27 @@ pub struct ResponseInfo {
     //pub created_on: u64,
 }
 
-impl<T> Response<T> {
-    fn has_partitions(&self) -> bool {
-        1 < self.info.result_set_meta_data.partition_info.len()
-    }
-}
-
 impl Response<RawRow> {
-    pub fn data<R: FromRow>(self) -> Result<Response<R>> {
-        Ok(Response {
-            data: self
-                .data
-                .into_iter()
-                .map(|rr: RawRow| R::from_row(rr.0))
-                .collect::<snowsql_deserialize::Result<Vec<R>>>()?,
-            info: self.info,
-        })
+    pub fn split<R: FromRow>(self) -> Result<(ResponseInfo, Vec<R>)> {
+        let info = self.info;
+
+        let data = self
+            .data
+            .into_iter()
+            .map(|rr: RawRow| R::from_row(rr.0))
+            .collect::<snowsql_deserialize::Result<Vec<R>>>()?;
+
+        Ok((info, data))
+    }
+
+    pub fn rows<R: FromRow>(self) -> Result<Vec<R>> {
+        let rows = self
+            .data
+            .into_iter()
+            .map(|rr: RawRow| R::from_row(rr.0))
+            .collect::<snowsql_deserialize::Result<Vec<R>>>()?;
+
+        Ok(rows)
     }
 }
 
