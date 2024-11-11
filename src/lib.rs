@@ -120,10 +120,6 @@ impl QueryBuilder {
 
     pub async fn query(self, c: &Client) -> Result<Response<RawRow>> {
         let qry = self.build_query();
-        println!(
-            "sending query `{}`",
-            serde_json::to_string_pretty(&qry).unwrap()
-        );
 
         let mut response = c
             .post()
