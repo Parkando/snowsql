@@ -1,24 +1,24 @@
 use data_manipulation::DataManipulationResult;
-use std::collections::HashMap;
-
-pub use snowsql_derive::{FromRow, Selectable};
-pub use snowsql_deserialize::{
-    BindingKind, BindingValue, DeserializeFromStr, Error as DeserializeError, FromRow,
-    Result as DeserializeResult,
-};
+use std::{collections::HashMap, marker::PhantomData};
 
 mod client;
 pub mod data_manipulation;
 mod error;
 mod jwt;
-mod pagination;
+mod partitions;
 mod selectable;
 
 pub use {
     client::Client,
     error::{CredentialsError, Error},
-    pagination::*,
+    partitions::Partitions,
     selectable::*,
+    serde,
+    snowsql_derive::{FromRow, Selectable},
+    snowsql_deserialize::{
+        BindingKind, BindingValue, Error as DeserializeError, FromRow, FromRowResult, FromValue,
+        RawRow, Result as DeserializeResult, Row, RowAccess,
+    },
 };
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -26,16 +26,24 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub struct PrivateKey(pub String);
 pub struct PublicKey(pub String);
 
-pub fn sql(statement: impl Into<String>) -> QueryBuilder {
+pub fn sql<R>(statement: impl Into<String>) -> QueryBuilder<R>
+where
+    R: FromRow,
+{
     QueryBuilder::new(statement)
 }
 
 trait ResponseOk {
-    async fn ok<T: serde::de::DeserializeOwned>(self) -> Result<T>;
+    async fn snowflake_response<T>(self) -> Result<T>
+    where
+        T: serde::de::DeserializeOwned;
 }
 
 impl ResponseOk for reqwest::Response {
-    async fn ok<T: serde::de::DeserializeOwned>(self) -> Result<T> {
+    async fn snowflake_response<T>(self) -> Result<T>
+    where
+        T: serde::de::DeserializeOwned,
+    {
         let status = self.status();
         let bs = self.bytes().await?;
 
@@ -46,32 +54,59 @@ impl ResponseOk for reqwest::Response {
 
         match serde_json::from_slice::<T>(&bs) {
             Ok(deserialized) => Ok(deserialized),
-            Err(err) => Err(Error::DeserializeSnowflakeResponse {
-                err,
-                body: String::from_utf8_lossy(&bs).into(),
-            }),
+            Err(err) => {
+                let lines_to_skip = err.line().max(1) - 1;
+                let chars_to_skip = err.column().max(100) - 100;
+
+                let mut iter = bs.iter();
+
+                let mut line_counter = 0;
+                let mut b_counter = 0;
+
+                let extract_bs = (&mut iter)
+                    .skip_while(|&&b| {
+                        if b == b'\n' {
+                            line_counter += 1;
+                        }
+
+                        line_counter < lines_to_skip
+                    })
+                    .skip_while(|_| {
+                        b_counter += 1;
+                        b_counter < chars_to_skip
+                    })
+                    .copied()
+                    .take(200)
+                    .collect::<Vec<u8>>();
+
+                Err(Error::DeserializeSnowflakeResponse {
+                    err,
+                    body: String::from_utf8_lossy(&extract_bs).into(),
+                })
+            }
         }
     }
 }
 
-#[derive(serde::Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-struct Partition {
-    data: Vec<RawRow>,
-}
-
 #[derive(Clone, Debug)]
-pub struct QueryBuilder {
-    statement: String,
+pub struct QueryBuilder<R> {
+    pub statement: String,
     timeout: Option<u32>,
     role: Option<String>,
     bindings: HashMap<String, Binding>,
     order_by: Option<String>,
     offset: Option<usize>,
     limit: Option<usize>,
+
+    parameters: Option<StatementParameters>,
+
+    _marker: PhantomData<R>,
 }
 
-impl QueryBuilder {
+impl<R> QueryBuilder<R>
+where
+    R: FromRow,
+{
     pub fn new(query: impl Into<String>) -> Self {
         Self {
             statement: query.into(),
@@ -81,6 +116,8 @@ impl QueryBuilder {
             order_by: None,
             offset: None,
             limit: None,
+            parameters: None,
+            _marker: PhantomData,
         }
     }
 
@@ -106,6 +143,7 @@ impl QueryBuilder {
             timeout: self.timeout,
             role: self.role,
             bindings: self.bindings,
+            parameters: self.parameters,
         }
     }
 
@@ -118,33 +156,18 @@ impl QueryBuilder {
             .await?)
     }
 
-    pub async fn query(self, c: &Client) -> Result<Response<RawRow>> {
+    pub async fn query(self, c: &Client) -> Result<Response<Row<R>>> {
         let qry = self.build_query();
 
-        let mut response = c
+        let response = c
             .post()
             .json(&qry)
             .send()
             .await?
-            .ok::<Response<RawRow>>()
+            .snowflake_response::<Response<Row<R>>>()
             .await?;
 
-        for index in 1..response.info.result_set_meta_data.partition_info.len() {
-            let partition = c
-                .get_partition(&response.info.statement_handle, index)
-                .send()
-                .await?
-                .ok::<Partition>()
-                .await?;
-
-            response.data.extend(partition.data);
-        }
-
         Ok(response)
-    }
-
-    pub fn paginated<R: FromRow>(self, client: &Client, pagination: Pagination) -> Paginated<R> {
-        Paginated::new(client, self, pagination)
     }
 
     /// Use with `delete`, `insert`, `update` row(s).
@@ -154,7 +177,7 @@ impl QueryBuilder {
             .json(&self.build_query())
             .send()
             .await?
-            .ok()
+            .snowflake_response::<DataManipulationResult>()
             .await?;
         Ok(res)
     }
@@ -185,8 +208,36 @@ impl QueryBuilder {
         self
     }
 
-    pub fn with_role<R: ToString>(mut self, role: R) -> Self {
-        self.role = Some(role.to_string());
+    pub fn with_role(mut self, role: impl Into<String>) -> Self {
+        self.role = Some(role.into());
+        self
+    }
+
+    /// (Optional) Specifies the maximum size of each set (or chunk) of query results to download (in MB).
+    /// For details, see
+    /// [CLIENT_RESULT_CHUNK_SIZE](https://docs.snowflake.com/sql-reference/parameters.html#label-client-result-chunk-size).
+    ///
+    /// Type: integer
+    ///
+    /// Example: 100
+    pub fn with_result_chunk_size(mut self, chunk_size: usize) -> Self {
+        self.parameters
+            .get_or_insert_with(StatementParameters::default)
+            .chunk_size = Some(chunk_size);
+        self
+    }
+
+    /// (Optional) Specifies the maximum number of rows returned in a result set,
+    /// with 0 (default) meaning no maximum. For details, see
+    /// [ROWS_PER_RESULTSET parameter](https://docs.snowflake.com/sql-reference/parameters.html#label-rows-per-resultset).
+    ///
+    /// Type: integer
+    ///
+    /// Example: 200
+    pub fn with_result_row_count(mut self, rows_per_result_set: usize) -> Self {
+        self.parameters
+            .get_or_insert_with(StatementParameters::default)
+            .rows_per_set = Some(rows_per_result_set);
         self
     }
 
@@ -205,6 +256,15 @@ impl QueryBuilder {
     }
 }
 
+#[derive(Default, Clone, serde::Serialize, Debug)]
+pub struct StatementParameters {
+    #[serde(rename = "client_result_chunk_size")]
+    pub chunk_size: Option<usize>,
+
+    #[serde(rename = "rows_per_resultset")]
+    pub rows_per_set: Option<usize>,
+}
+
 #[derive(Clone, serde::Serialize, Debug)]
 pub struct SnowflakeQuery {
     statement: String,
@@ -213,6 +273,9 @@ pub struct SnowflakeQuery {
 
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     bindings: HashMap<String, Binding>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parameters: Option<StatementParameters>,
 }
 
 #[derive(Clone, serde::Serialize, Debug)]
@@ -229,30 +292,20 @@ pub struct PartitionInfo {
     pub uncompressed_size: usize,
 }
 
-#[derive(Debug, serde::Deserialize)]
-pub struct RawRow(pub Vec<Option<String>>);
-
-impl FromRow for RawRow {
-    fn from_row(row: Vec<Option<String>>) -> DeserializeResult<Self>
-    where
-        Self: Sized,
-    {
-        Ok(Self(row))
-    }
-}
-
 #[derive(serde::Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct Response<T> {
-    pub data: Vec<T>,
+pub struct Response<R> {
+    pub data: Vec<R>,
 
     #[serde(flatten)]
     pub info: ResponseInfo,
 }
+
 #[derive(serde::Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ResponseInfo {
-    pub result_set_meta_data: MetaData,
+    #[serde(rename = "resultSetMetaData")]
+    pub meta: MetaData,
     pub code: String,
     pub statement_status_url: String,
     pub request_id: String,
@@ -262,27 +315,12 @@ pub struct ResponseInfo {
     //pub created_on: u64,
 }
 
-impl Response<RawRow> {
-    pub fn split<R: FromRow>(self) -> Result<(ResponseInfo, Vec<R>)> {
-        let info = self.info;
-
-        let data = self
-            .data
-            .into_iter()
-            .map(|rr: RawRow| R::from_row(rr.0))
-            .collect::<snowsql_deserialize::Result<Vec<R>>>()?;
-
-        Ok((info, data))
-    }
-
-    pub fn rows<R: FromRow>(self) -> Result<Vec<R>> {
-        let rows = self
-            .data
-            .into_iter()
-            .map(|rr: RawRow| R::from_row(rr.0))
-            .collect::<snowsql_deserialize::Result<Vec<R>>>()?;
-
-        Ok(rows)
+impl<R> Response<Row<R>>
+where
+    R: FromRow,
+{
+    pub fn partitions(self) -> Partitions<R> {
+        Partitions::from_response(self)
     }
 }
 

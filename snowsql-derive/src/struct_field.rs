@@ -1,7 +1,9 @@
+use quote::{quote, ToTokens};
 use syn::{punctuated::Punctuated, token};
 
 pub struct StructField<'a> {
     pub ident: &'a syn::Ident,
+    #[allow(dead_code)]
     pub index: usize,
     pub typ: &'a syn::Type,
     pub is_order_by: bool,
@@ -29,5 +31,12 @@ impl<'a> StructField<'a> {
             typ: &field.ty,
             is_order_by,
         })
+    }
+
+    pub fn seq_access_field_init(&self) -> impl ToTokens {
+        let ident = self.ident;
+        let typ = self.typ;
+
+        quote! { #ident: seq.next::<#typ>(stringify!(#ident))? }
     }
 }

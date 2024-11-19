@@ -55,35 +55,18 @@ fn impl_from_row(sd: &StructData) -> impl ToTokens {
     let (impl_generics, ty_generics, where_clause) = sd.generics.split_for_impl();
 
     let name = sd.ident;
-
-    let fields_from_str = sd.fields.iter().map(
-        |StructField {
-             ident, index, typ, ..
-         }| {
-            #[rustfmt::skip]
-        quote! {
-            #ident: <#typ>::deserialize_from_str(row[#index].as_deref())
-            .map_err(|err| snowsql::DeserializeError::Field {
-                field: stringify!(#ident),
-                err: Box::new(err)
-            })?
-        }
-        },
-    );
+    let field_inits = sd.fields.iter().map(|f| f.seq_access_field_init());
 
     #[rustfmt::skip]
     quote! {
-        impl #impl_generics snowsql::FromRow for #name #ty_generics #where_clause {
-            fn from_row(
-                row: Vec<Option<String>>
-            ) -> snowsql::DeserializeResult<Self> {
-		use snowsql::DeserializeFromStr;
-
+	impl #impl_generics snowsql::FromRow for #name #ty_generics #where_clause {
+	    fn from_row<'de, A>(mut seq: snowsql::RowAccess<A>) -> snowsql::FromRowResult<Self>
+	    where A: snowsql::serde::de::SeqAccess<'de> {
 		Ok(#name #ty_generics {
-		    #(#fields_from_str),*
+		    #(#field_inits),*
                 })
-            }
-        }
+	    }
+	}
     }
 }
 

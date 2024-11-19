@@ -1,23 +1,38 @@
-use snowsql::FromRow;
+use snowsql::{FromRow, Response, Row};
+use uuid::Uuid;
 
 #[allow(dead_code)]
 #[derive(Debug, FromRow)]
 struct SnowyRow {
-    client_id: String,
+    client_id: u32,
     client_name: String,
-    site_id: String,
+    site_id: Uuid,
     site_name: String,
     num_permits: Option<i64>,
 }
 
 #[test]
 fn deserialize_example() {
-    let response = serde_json::from_str::<snowsql::Response<snowsql::RawRow>>(EXAMPLE)
-        .expect("deserializing response");
+    let res =
+        serde_json::from_str::<Response<Row<SnowyRow>>>(EXAMPLE).expect("deserializing response");
 
-    response
-        .rows::<SnowyRow>()
-        .expect("deserializing snowy rows");
+    assert_eq!(res.data.len(), 2);
+
+    assert_eq!(res.data[0].0.client_id, 3);
+    assert_eq!(res.data[0].0.client_name, "Parkando");
+    assert_eq!(
+        res.data[0].0.site_id,
+        Uuid::from_u128(0x7a7cb2b5_8f4b_4f49_9875_32576d808de2)
+    );
+    assert_eq!(res.data[0].0.num_permits, None);
+
+    assert_eq!(res.data[1].0.client_id, 4);
+    assert_eq!(res.data[1].0.client_name, "OtherCompany");
+    assert_eq!(
+        res.data[1].0.site_id,
+        Uuid::from_u128(0x7a9ca2b5_8f4b_4f49_9875_32576d83832a)
+    );
+    assert_eq!(res.data[1].0.num_permits, Some(23));
 }
 
 static EXAMPLE: &str = r#"
@@ -104,15 +119,15 @@ static EXAMPLE: &str = r#"
       "3",
       "Parkando",
       "7a7cb2b5-8f4b-4f49-9875-32576d808de2",
-      "Grev Turegatan 29 - TCO-garaget",
+      "Garage 1",
       null
     ],
     [
-      "3",
-      "Parkando",
-      "7a7cb2b5-8f4b-4f49-9875-32576d808de2",
-      "Grev Turegatan 29 - TCO-garaget",
-      null
+      "4",
+      "OtherCompany",
+      "7a9ca2b5-8f4b-4f49-9875-32576d83832a",
+      "Garage 2",
+      "23"
     ]
   ],
   "code": "090001",

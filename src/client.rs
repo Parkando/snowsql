@@ -1,4 +1,5 @@
 use reqwest::header::{HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
+use snowsql_deserialize::RawRow;
 
 use crate::{jwt, PrivateKey, PublicKey, Result};
 
@@ -72,7 +73,7 @@ impl Client {
     }
 
     pub async fn verify(&self) -> Result<bool> {
-        let res = crate::sql("SELECT 1").query(self).await?;
+        let res = crate::sql::<RawRow>("SELECT 1").query(self).await?;
         Ok(!res.data.is_empty())
     }
 }
