@@ -77,6 +77,10 @@ impl FromValue for time::OffsetDateTime {
 }
 
 fn parse_utc(s: &str) -> Result<time::OffsetDateTime, Error> {
+    let max_seconds: i64 = (time::PrimitiveDateTime::MAX.assume_utc()
+        - time::OffsetDateTime::UNIX_EPOCH)
+        .whole_seconds();
+
     let mut parts = s.split('.');
 
     let secs_s = parts.next().ok_or_else(|| Error::Format {
@@ -84,10 +88,16 @@ fn parse_utc(s: &str) -> Result<time::OffsetDateTime, Error> {
         err: "invalid DateTime".into(),
     })?;
 
-    let secs = secs_s.parse::<i64>().map_err(|err| Error::Format {
+    let parsed_secs = secs_s.parse::<i64>().map_err(|err| Error::Format {
         given: s.into(),
         err: format!("parsing seconds from `{secs_s}`: {err}"),
     })?;
+
+    let secs = if max_seconds < parsed_secs {
+        max_seconds
+    } else {
+        parsed_secs
+    };
 
     let nanos = parts
         .next()
@@ -100,9 +110,19 @@ fn parse_utc(s: &str) -> Result<time::OffsetDateTime, Error> {
         .transpose()?
         .unwrap_or(0);
 
-    Ok(time::OffsetDateTime::UNIX_EPOCH
-        + time::Duration::seconds(secs)
-        + time::Duration::nanoseconds(nanos))
+    let res = time::OffsetDateTime::UNIX_EPOCH
+        .checked_add(time::Duration::seconds(secs))
+        .ok_or_else(|| Error::Format {
+            given: s.into(),
+            err: format!("value to large. `{secs}` seconds"),
+        })?
+        .checked_add(time::Duration::nanoseconds(nanos))
+        .ok_or_else(|| Error::Format {
+            given: s.into(),
+            err: format!("value to large. `{nanos}` nanoseconds"),
+        })?;
+
+    Ok(res)
 }
 
 #[cfg(test)]
@@ -131,6 +151,16 @@ mod tests {
         assert_eq!(
             datetime!(2024-11-14 08:59:19.273124000 +24),
             time::OffsetDateTime::from_value("1731574759.273124000 1440").expect("deserializing")
+        );
+    }
+
+    /// when encountering a date that cannot fit into a normal time.
+    /// (i.e. after the year 9999) we should truncate it to 9999-12-31
+    #[test]
+    fn deserialize_too_large_datetime() {
+        assert_eq!(
+            datetime!(9999-12-31 23:59:59.0 +24:00:00),
+            time::OffsetDateTime::from_value("6318666835200 1440").expect("deserializing")
         );
     }
 }
