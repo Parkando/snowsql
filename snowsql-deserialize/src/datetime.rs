@@ -24,7 +24,6 @@ impl FromValue for time::Date {
 
         let date = time::OffsetDateTime::UNIX_EPOCH.date() + time::Duration::days(days);
 
-        println!("parsing `{s}` as Date: {date}");
         Ok(date)
     }
 }
