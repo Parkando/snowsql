@@ -47,6 +47,12 @@ impl ResponseOk for reqwest::Response {
         let status = self.status();
         let bs = self.bytes().await?;
 
+        {
+            let s = String::from_utf8_lossy(&bs);
+
+            println!("raw data: `{s}`");
+        }
+
         if !status.is_success() {
             let body = String::from_utf8_lossy(&bs).into();
             return Err(Error::NokResponse { status, body });
