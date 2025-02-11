@@ -36,7 +36,7 @@ where
                 field,
                 err: err.to_string(),
             })?
-            .ok_or_else(|| FromRowError::MissingField {
+            .ok_or(FromRowError::MissingField {
                 idx: self.idx,
                 field,
             })?;

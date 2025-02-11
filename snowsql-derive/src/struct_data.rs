@@ -56,7 +56,7 @@ impl<'a> TryFrom<&'a DeriveInput> for StructData<'a> {
     }
 }
 
-impl<'a> StructData<'a> {
+impl StructData<'_> {
     pub fn order_by(&self) -> String {
         let fields_with_order_by = self.fields.iter().filter(|f| f.is_order_by).count();
 

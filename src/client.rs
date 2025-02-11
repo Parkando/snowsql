@@ -6,26 +6,26 @@ use crate::{jwt, PrivateKey, PublicKey, Result};
 #[derive(Debug, Clone)]
 pub struct Client {
     host: String,
-    pub token: String,
+    pub jwt: String,
     http: reqwest::Client,
 }
 
 impl Client {
-    pub fn try_new(
+    pub fn new_with_keys(
         private_key: PrivateKey,
         public_key: PublicKey,
         host: &str,
         account_identifier: &str,
         user: &str,
     ) -> Result<Self> {
-        let token = jwt::create_token(
-            public_key,
-            private_key,
-            &account_identifier.to_ascii_uppercase(),
-            &user.to_ascii_uppercase(),
-        )?;
+        let token = jwt::create_token(public_key, private_key, account_identifier, user)?;
 
-        let auth_header = HeaderValue::from_str(&format!("Bearer {token}"))
+        Self::new_with_jwt(host, token)
+    }
+
+    pub fn new_with_jwt(host: &str, jwt: impl Into<String>) -> Result<Self> {
+        let jwt = jwt.into();
+        let auth_header = HeaderValue::from_str(&format!("Bearer {jwt}"))
             .expect("could not serialize token into header");
 
         let user_agent = concat!(env!("CARGO_PKG_NAME"), '/', env!("CARGO_PKG_VERSION"));
@@ -48,7 +48,7 @@ impl Client {
 
         Ok(Self {
             host: format!("https://{host}.snowflakecomputing.com/api/v2/"),
-            token,
+            jwt,
             http,
         })
     }

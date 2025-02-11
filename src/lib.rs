@@ -2,11 +2,12 @@ use data_manipulation::DataManipulationResult;
 use std::{collections::HashMap, marker::PhantomData};
 
 mod client;
-pub mod data_manipulation;
 mod error;
-mod jwt;
 mod partitions;
 mod selectable;
+
+pub mod data_manipulation;
+pub mod jwt;
 
 pub use {
     client::Client,

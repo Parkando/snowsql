@@ -15,6 +15,9 @@ pub fn create_token(
     account_identifier: &str,
     user: &str,
 ) -> Result<String> {
+    let account_identifier = account_identifier.to_ascii_uppercase();
+    let user = user.to_ascii_uppercase();
+
     let pub_key = RsaPublicKey::from_public_key_pem(public_key.0.as_str())
         .map_err(|_| CredentialsError::PublicKey)?;
     let priv_key = RsaPrivateKey::from_pkcs8_pem(private_key.0.as_str())
