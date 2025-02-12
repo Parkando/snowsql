@@ -66,7 +66,7 @@ where
         }
 
         let raw_rows = c
-            .get_partition(&self.info.statement_handle, self.next_index)
+            .get_partition(&self.info.statement_handle, self.next_index)?
             .send()
             .await?
             .snowflake_response::<RawPartition<Row<R>>>()

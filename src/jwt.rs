@@ -10,8 +10,8 @@ use rsa::{
 use crate::{CredentialsError, PrivateKey, PublicKey, Result};
 
 pub fn create_token(
-    public_key: PublicKey,
-    private_key: PrivateKey,
+    public_key: &PublicKey,
+    private_key: &PrivateKey,
     account_identifier: &str,
     user: &str,
 ) -> Result<String> {

@@ -149,7 +149,7 @@ where
     }
 
     pub async fn text(self, c: &Client) -> Result<String> {
-        Ok(c.post()
+        Ok(c.post()?
             .json(&self.build_query())
             .send()
             .await?
@@ -161,7 +161,7 @@ where
         let qry = self.build_query();
 
         let response = c
-            .post()
+            .post()?
             .json(&qry)
             .send()
             .await?
@@ -174,7 +174,7 @@ where
     /// Use with `delete`, `insert`, `update` row(s).
     pub async fn manipulate(self, c: &Client) -> Result<DataManipulationResult> {
         let res = c
-            .post()
+            .post()?
             .json(&self.build_query())
             .send()
             .await?

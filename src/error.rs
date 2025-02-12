@@ -21,6 +21,9 @@ pub enum Error {
 
     #[error("deserialize: {0}")]
     Deserialize(#[from] snowsql_deserialize::Error),
+
+    #[error("Internal Mutex error")]
+    InternalMutexError,
 }
 
 #[derive(Debug, thiserror::Error)]
