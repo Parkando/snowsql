@@ -122,8 +122,9 @@ where
         }
     }
 
-    fn build_query(self) -> SnowflakeQuery {
-        let mut statement = self.statement.clone();
+    fn build_statement(&self) -> String {
+        let mut statement = String::new();
+        statement.push_str(&self.statement);
 
         if let Some(order_by) = self.order_by.as_deref() {
             statement.push_str(" ORDER BY '");
@@ -139,13 +140,21 @@ where
             statement.push_str(&format!(" OFFSET {offset}"));
         }
 
+        statement
+    }
+
+    fn build_query(self) -> SnowflakeQuery {
         SnowflakeQuery {
-            statement,
+            statement: self.build_statement(),
             timeout: self.timeout,
             role: self.role,
             bindings: self.bindings,
             parameters: self.parameters,
         }
+    }
+
+    pub fn as_statement(&self) -> String {
+        self.build_statement()
     }
 
     pub async fn text(self, c: &Client) -> Result<String> {
