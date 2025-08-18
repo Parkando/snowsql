@@ -90,8 +90,8 @@ mod tests {
         let user = "ParkandoReader";
 
         create_token(
-            PublicKey(public_key),
-            PrivateKey(private_key),
+            &PublicKey(public_key),
+            &PrivateKey(private_key),
             account_identifier,
             user,
         )
